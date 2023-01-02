@@ -1,61 +1,82 @@
-#include "WM8978.h"
-
-// ---------------- Audio.cpp
-#include "driver/i2s.h"
+#include <stdint.h>
+#include <stdlib.h>
+#include <math.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-// ---------------- DSP.cpp
-#include <math.h>
+#include "driver/i2s_std.h"
+#include "driver/gpio.h"
+#include "esp_check.h"
+#include "WM8978.h"
+#define I2S_SAMPLE_RATE     (48000)   // I2S sample rate 
 
-#define I2S_SAMPLE_RATE     (32000)   // I2S sample rate 
-// Define 12S pins
-#define I2S_BCLK       23  // Bit clock 
-#define I2S_LRC        25  // Left Right / WS Clock
-#define I2S_DOUT       26  
-#define I2S_DIN        27
-#define I2S_MCLKPIN     0     // MCLK 
+// Initialise I2S
+i2s_chan_handle_t tx_handle;
+i2s_chan_handle_t rx_handle;
 
-// ---------------- Audio.cpp
-void I2S_init(void)
+static void init_i2s(void)
 {
-    i2s_config_t i2s_config = {
-                .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX | I2S_MODE_RX),
-                .sample_rate = I2S_SAMPLE_RATE,
-                .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
-                .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
-                .communication_format = (i2s_comm_format_t)(I2S_COMM_FORMAT_STAND_I2S),
-                .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1, // high interrupt priority
-                .dma_buf_count = 4,         // adjust for DSP 
-                .dma_buf_len = 40,          // adjust for DSP 
-                .use_apll = true
-            };
-    
-     i2s_pin_config_t pin_config = {
-        .bck_io_num = I2S_BCLK,
-        .ws_io_num = I2S_LRC,
-        .data_out_num = I2S_DOUT,
-        .data_in_num = I2S_DIN                                        
+    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
+    // Allocate both tx and rx channel at the same time for full-duplex mode.
+    ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, &tx_handle, &rx_handle));
+    i2s_std_config_t std_cfg = {
+        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(I2S_SAMPLE_RATE),
+        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
+        .gpio_cfg = {
+            .mclk = GPIO_NUM_0,
+            .bclk = GPIO_NUM_23,
+            .ws = GPIO_NUM_25,
+            .dout = GPIO_NUM_26,
+            .din = GPIO_NUM_27,
+            .invert_flags = {
+                .mclk_inv = false,
+                .bclk_inv = false,
+                .ws_inv = false,
+            },
+        },
     };
-
-    i2s_driver_install(I2S_NUM_0, &i2s_config, 0, NULL);                            // install the driver on Core 0
-    i2s_set_pin(I2S_NUM_0, &pin_config);                                            // port & pin config 
-    // Deprecated pin setting for clk setup:
-    // PIN_FUNC_SELECT(PERIPHS_IO_MUX_GPIO0_U, FUNC_GPIO0_CLK_OUT1);                   // MCLK on GPIO0
-    // REG_WRITE(PIN_CTRL, 0xFFFFFFF0);                                                
-    uint32_t bits_cfg = (I2S_BITS_PER_CHAN_32BIT << 16) | I2S_BITS_PER_SAMPLE_16BIT;
-    i2s_set_clk(I2S_NUM_0, 22050, bits_cfg, I2S_CHANNEL_STEREO);
-
-    i2s_set_sample_rates(I2S_NUM_0, I2S_SAMPLE_RATE);                             // set sample rate used for I2S TX and RX
+    std_cfg.clk_cfg.mclk_multiple = I2S_MCLK_MULTIPLE_256;
+    // Initialise the channels
+    ESP_ERROR_CHECK(i2s_channel_init_std_mode(tx_handle, &std_cfg));
+    ESP_ERROR_CHECK(i2s_channel_init_std_mode(rx_handle, &std_cfg));
 }
 
-// ---------------- DSP.cpp
+#define EXAMPLE_BUFF_SIZE               2048
+static void passthrough(void *args)
+{
+    uint16_t *buf = (uint16_t *)calloc(1, EXAMPLE_BUFF_SIZE);
+    if (!buf) {
+        printf("No memory for read data buffer");
+        abort();
+    }
+    esp_err_t ret = ESP_OK;
+    size_t bytes_read = 0;
+    size_t bytes_write = 0;
+    printf("Passthrough start");
+    while (1) {
+        /* Read sample data from ADC */
+        ret = i2s_channel_read(rx_handle, buf, EXAMPLE_BUFF_SIZE, &bytes_read, 1000);
+        if (ret != ESP_OK) {
+            printf("i2s read failed");
+            abort();
+        }
+        /* Write sample data to DAC */
+        ret = i2s_channel_write(tx_handle, buf, EXAMPLE_BUFF_SIZE, &bytes_write, 1000);
+        if (ret != ESP_OK) {
+            printf("i2s write failed");
+            abort();
+        }
+        if (bytes_read != bytes_write) {
+            printf("%d bytes read but only %d bytes are written", bytes_read, bytes_write);
+        }
+    }
+    vTaskDelete(NULL);
+}
 // DSP parameters 
 #define WAVE_FREQ_HZ    (200)  // test waveform frequency
 #define PI              (3.14159265)
 #define SAMPLES_PER_CYCLE (I2S_SAMPLE_RATE/WAVE_FREQ_HZ)
-void test_sine_wave()             // function to generate a test sine wave
-{       
-  
+static void sine_wave(void *args)             // function to generate a test sine wave
+{
     float freq = (WAVE_FREQ_HZ);
     unsigned sample_rate = I2S_SAMPLE_RATE;
     size_t buf_size = (SAMPLES_PER_CYCLE*8);   // number of cycles to store in the buffer
@@ -72,19 +93,13 @@ void test_sine_wave()             // function to generate a test sine wave
     //using 4 buffers, we need 40-samples per buffer 
     //if 2-channels, 16-bit each channel, total buffer is 160*4 = 640 bytes
     //if 2-channels, 24/32-bit each channel, total buffer is 160*8 = 1280 bytes
-    //adjust dma buf count and dma buf len in Audio.cpp file as needed
-
-  i2s_set_clk(I2S_NUM_0, I2S_SAMPLE_RATE, I2S_BITS_PER_SAMPLE_16BIT, I2S_CHANNEL_STEREO); // Set clock & bit width used for I2S RX and TX
-
-  // call the write function and pass the data buffer address and data length to it, write the data to the I2S DMA TX buffer
-  size_t i2s_bytes_write = 0;
-  i2s_write(I2S_NUM_0, samples_sine, buf_size, &i2s_bytes_write, portMAX_DELAY);  
-
-  delete(samples_sine);
+    size_t w_bytes = 0;
+    while (1){
+        i2s_channel_write(tx_handle, samples_sine, buf_size,&w_bytes,1000);
+    };
+    vTaskDelete(NULL);
 }
 
-
-// ----------------- main.cpp
 extern "C" {
     void app_main(void);
 }
@@ -92,18 +107,19 @@ extern "C" {
 WM8978 wm8978;   // create an instance of WM8978 class for the audio codec 
 void app_main() { 
   
-  I2S_init();         // I2S config and driver install
+    init_i2s();
+    ESP_ERROR_CHECK(i2s_channel_enable(tx_handle));
+    ESP_ERROR_CHECK(i2s_channel_enable(rx_handle));
 
-  wm8978.init();            // WM8978 codec initialisation
-  wm8978.addaCfg(1,1);      // enable the adc and the dac
-  wm8978.inputCfg(0,0,0);   // input config
-  wm8978.outputCfg(1,0);    // output config
-  wm8978.spkVolSet(40);     // speaker volume
-  wm8978.hpVolSet(40,40);   // headphone volume
-  wm8978.sampleRate(1);     // set sample rate to match I2S sample rate
-  wm8978.i2sCfg(2,0);       // I2S format MSB, 16Bit
+    wm8978.init();            // WM8978 codec initialisation
+    wm8978.addaCfg(1,1);      // enable the adc and the dac
+    wm8978.inputCfg(0,1,0);   // Enable linein
+    wm8978.outputCfg(1,0);    // Enable dac out, no bypass.
+    wm8978.spkVolSet(0);      // speaker volume not required, set to 0.
+    wm8978.hpVolSet(40,40);   // headphone volume
+    wm8978.sampleRate(0);     // set sample rate to 48kHz
+    wm8978.i2sCfg(2,0);       // I2S format Philips, 16bit
 
-  vTaskDelay(500/portTICK_PERIOD_MS);
-  
-  test_sine_wave();  // initialise DSP 
+    // xTaskCreate(sine_wave, "sine_wave", 4096, NULL, 5, NULL);
+    xTaskCreate(passthrough, "passthrough", 4096, NULL, 5, NULL);
 }
