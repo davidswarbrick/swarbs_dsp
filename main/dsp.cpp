@@ -7,7 +7,13 @@
 #include "driver/gpio.h"
 #include "esp_check.h"
 #include "WM8978.h"
-#define I2S_SAMPLE_RATE     (48000)   // I2S sample rate 
+#define I2S_SAMPLE_RATE     (48000) // I2S sample rate 
+#define BUFFER_SIZE         32      // Taken from Faust boilerplate, 2048 works too.
+
+// Sine wave example parameters 
+#define WAVE_FREQ_HZ    (200)  // test waveform frequency
+#define PI              (3.14159265)
+#define SAMPLES_PER_CYCLE (I2S_SAMPLE_RATE/WAVE_FREQ_HZ)
 
 // Initialise I2S
 i2s_chan_handle_t tx_handle;
@@ -40,10 +46,10 @@ static void init_i2s(void)
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(rx_handle, &std_cfg));
 }
 
-#define EXAMPLE_BUFF_SIZE               2048
+
 static void passthrough(void *args)
 {
-    uint16_t *buf = (uint16_t *)calloc(1, EXAMPLE_BUFF_SIZE);
+    uint16_t *buf = (uint16_t *)calloc(1, BUFFER_SIZE);
     if (!buf) {
         printf("No memory for read data buffer");
         abort();
@@ -54,13 +60,13 @@ static void passthrough(void *args)
     printf("Passthrough start");
     while (1) {
         /* Read sample data from ADC */
-        ret = i2s_channel_read(rx_handle, buf, EXAMPLE_BUFF_SIZE, &bytes_read, 1000);
+        ret = i2s_channel_read(rx_handle, buf, BUFFER_SIZE, &bytes_read, 1000);
         if (ret != ESP_OK) {
             printf("i2s read failed");
             abort();
         }
         /* Write sample data to DAC */
-        ret = i2s_channel_write(tx_handle, buf, EXAMPLE_BUFF_SIZE, &bytes_write, 1000);
+        ret = i2s_channel_write(tx_handle, buf, BUFFER_SIZE, &bytes_write, 1000);
         if (ret != ESP_OK) {
             printf("i2s write failed");
             abort();
@@ -71,10 +77,7 @@ static void passthrough(void *args)
     }
     vTaskDelete(NULL);
 }
-// DSP parameters 
-#define WAVE_FREQ_HZ    (200)  // test waveform frequency
-#define PI              (3.14159265)
-#define SAMPLES_PER_CYCLE (I2S_SAMPLE_RATE/WAVE_FREQ_HZ)
+
 static void sine_wave(void *args)             // function to generate a test sine wave
 {
     float freq = (WAVE_FREQ_HZ);
@@ -87,12 +90,6 @@ static void sine_wave(void *args)             // function to generate a test sin
         value += samples_sine[i];
         //printf("Samples_sine=%d\n", value);   // comment out to print the samples data, only use one call to printf in the function
     }
-    
-    //calculating the dsp buffer size; for 32Khz sample rate we create a 200Hz sine wave, every cycle needs 32000/200 = 160 samples 
-    //(4-bytes or 8-bytes each sample) depending on bits_per_sample
-    //using 4 buffers, we need 40-samples per buffer 
-    //if 2-channels, 16-bit each channel, total buffer is 160*4 = 640 bytes
-    //if 2-channels, 24/32-bit each channel, total buffer is 160*8 = 1280 bytes
     size_t w_bytes = 0;
     while (1){
         i2s_channel_write(tx_handle, samples_sine, buf_size,&w_bytes,1000);
@@ -114,6 +111,7 @@ void app_main() {
     wm8978.init();            // WM8978 codec initialisation
     wm8978.addaCfg(1,1);      // enable the adc and the dac
     wm8978.inputCfg(0,1,0);   // Enable linein
+    wm8978.lineinGain(3);
     wm8978.outputCfg(1,0);    // Enable dac out, no bypass.
     wm8978.spkVolSet(0);      // speaker volume not required, set to 0.
     wm8978.hpVolSet(40,40);   // headphone volume
