@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <math.h>
+#include <algorithm> //std max/min
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/i2s_std.h"
@@ -8,7 +9,13 @@
 #include "esp_check.h"
 #include "WM8978.h"
 #define I2S_SAMPLE_RATE     (48000) // I2S sample rate 
-#define BUFFER_SIZE         32      // Taken from Faust boilerplate, 2048 works too.
+#define BUFFER_SIZE         32      // Borrowed from Faust boilerplate, 2048 works too.
+#define MULT_S32 2147483647 // Max value for int32
+#define MULT_S16 32767 // Max value for int16
+#define DIV_S16 3.0518509e-5 // 1/MULT+S16
+#define clip(sample) std::max(-MULT_S16, std::min(MULT_S16, ((int)(sample * MULT_S16))));
+
+
 
 // Sine wave example parameters 
 #define WAVE_FREQ_HZ    (200)  // test waveform frequency
@@ -97,6 +104,67 @@ static void sine_wave(void *args)             // function to generate a test sin
     vTaskDelete(NULL);
 }
 
+static void convert_to_float(void *args)
+{
+    // Set up stereo buffers.
+    int16_t *samples_data_buf = (int16_t *)calloc(1, 2*BUFFER_SIZE);
+    float ** inSlot = new float*[2];
+    inSlot[0] = new float[BUFFER_SIZE];
+    inSlot[1] = new float[BUFFER_SIZE];
+
+    float ** outSlot = new float*[2];
+    outSlot[0] = new float[BUFFER_SIZE];
+    outSlot[1] = new float[BUFFER_SIZE];
+    if (!inSlot || !samples_data_buf || !outSlot) {
+        printf("No memory for data buffers");
+        abort();
+    }
+    esp_err_t ret = ESP_OK;
+    size_t bytes_read = 0;
+    size_t bytes_write = 0;
+    printf("Float conversion start");
+    while (1) {
+        /* Read sample data from ADC */
+        ret = i2s_channel_read(rx_handle, samples_data_buf, BUFFER_SIZE, &bytes_read, 1000);
+        if (ret != ESP_OK) {
+            printf("i2s read failed");
+            abort();
+        }
+
+        // Convert u16 to float(32).
+        for (int i = 0; i< BUFFER_SIZE; i++){
+            inSlot[0][i] = (float)samples_data_buf[i*2]*DIV_S16;
+            inSlot[1][i] = (float)samples_data_buf[i*2+1]*DIV_S16;
+        }
+        
+        // Process samples here, for now just copy.
+        for (int i = 0; i< BUFFER_SIZE; i++){
+            outSlot[0][i] = inSlot[0][i];
+            outSlot[1][i] = inSlot[1][i];
+        }
+
+        // Convert from float back to u16.
+        for (int i = 0; i< BUFFER_SIZE; i++){
+            samples_data_buf[i*2] = clip(outSlot[0][i]);
+            samples_data_buf[i*2+1] = clip(outSlot[1][i]);
+        }
+
+        /* Write sample data to DAC */
+        ret = i2s_channel_write(tx_handle, samples_data_buf, BUFFER_SIZE, &bytes_write, 1000);
+        if (ret != ESP_OK) {
+            printf("i2s write failed");
+            abort();
+        }
+        if (bytes_read != bytes_write) {
+            printf("%d bytes read but only %d bytes are written", bytes_read, bytes_write);
+        }
+    }
+    vTaskDelete(NULL);
+}
+
+
+
+
 extern "C" {
     void app_main(void);
 }
@@ -119,5 +187,6 @@ void app_main() {
     wm8978.i2sCfg(2,0);       // I2S format Philips, 16bit
 
     // xTaskCreate(sine_wave, "sine_wave", 4096, NULL, 5, NULL);
-    xTaskCreate(passthrough, "passthrough", 4096, NULL, 5, NULL);
+    // xTaskCreate(passthrough, "passthrough", 4096, NULL, 5, NULL);
+    xTaskCreate(convert_to_float, "convert_to_float", 4096, NULL, 5, NULL);
 }
