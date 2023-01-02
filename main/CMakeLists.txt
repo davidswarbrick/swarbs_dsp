@@ -1,2 +1,3 @@
-idf_component_register(SRCS "hello_world_main.c"
+set(SOURCES dsp.cpp WM8978.cpp)
+idf_component_register(SRCS ${SOURCES}
                     INCLUDE_DIRS "")
