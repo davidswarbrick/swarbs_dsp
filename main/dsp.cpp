@@ -104,6 +104,16 @@ static void sine_wave(void *args)             // function to generate a test sin
     vTaskDelete(NULL);
 }
 
+static void process(float ** inSlot, float ** outSlot, int buffer_size)
+{
+    // Process samples here, for now just copy.
+    for (int i = 0; i< buffer_size; i++){
+        outSlot[0][i] = inSlot[0][i];
+        outSlot[1][i] = inSlot[1][i];
+    }
+}
+
+
 static void convert_to_float(void *args)
 {
     // Set up stereo buffers.
@@ -137,11 +147,7 @@ static void convert_to_float(void *args)
             inSlot[1][i] = (float)samples_data_buf[i*2+1]*DIV_S16;
         }
         
-        // Process samples here, for now just copy.
-        for (int i = 0; i< BUFFER_SIZE; i++){
-            outSlot[0][i] = inSlot[0][i];
-            outSlot[1][i] = inSlot[1][i];
-        }
+        process(inSlot, outSlot, BUFFER_SIZE);
 
         // Convert from float back to u16.
         for (int i = 0; i< BUFFER_SIZE; i++){
