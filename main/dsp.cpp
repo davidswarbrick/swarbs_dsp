@@ -8,8 +8,10 @@
 #include "driver/gpio.h"
 #include "esp_check.h"
 #include "WM8978.h"
+#include "reverb.h"
 #define I2S_SAMPLE_RATE     (48000) // I2S sample rate 
-#define BUFFER_SIZE         32      // Borrowed from Faust boilerplate, 2048 works too.
+// #define BUFFER_SIZE         32      // Borrowed from Faust boilerplate, 2048 works too.
+#define BUFFER_SIZE 2048
 #define MULT_S32 2147483647 // Max value for int32
 #define MULT_S16 32767 // Max value for int16
 #define DIV_S16 3.0518509e-5 // 1/MULT+S16
@@ -147,8 +149,9 @@ static void convert_to_float(void *args)
             inSlot[1][i] = (float)samples_data_buf[i*2+1]*DIV_S16;
         }
         
-        process(inSlot, outSlot, BUFFER_SIZE);
-
+        // process(inSlot, outSlot, BUFFER_SIZE);
+        comb_filter(inSlot[0], outSlot[0], BUFFER_SIZE, I2S_SAMPLE_RATE,0.4,0.7);
+        comb_filter(inSlot[1], outSlot[1], BUFFER_SIZE, I2S_SAMPLE_RATE,2.4,0.7);
         // Convert from float back to u16.
         for (int i = 0; i< BUFFER_SIZE; i++){
             samples_data_buf[i*2] = clip(outSlot[0][i]);

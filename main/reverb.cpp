@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cstdlib>
 // Mono, could deconstruct float ** into two float * (outSlot[0], outSlot[1]) for stereo.
 void comb_filter(float * inSlot, 
                  float * outSlot,
@@ -20,13 +21,20 @@ void comb_filter(float * inSlot,
 
 void normalise_and_smooth(float * outSlot, int buffer_size){
     // Find maximum of outSlot, scale all values by this.
-    max_absolute_pointer = std::max_element(outSlot[0], outSlot[buffer_size], [](float a, float b) {
-        return std::abs(a) < std::abs(b);
-    });
+    float max = 0.0f;
+
+    for (int i=0; i<buffer_size; i++){
+        if(std::abs(outSlot[i]) > max){
+            max = outSlot[i];
+        }
+    };
+    // float max_absolute_pointer = std::max_element(outSlot[0], outSlot[buffer_size], [](float a, float b) {
+    //     return std::abs(a) < std::abs(b);
+    // });
     float value = outSlot[0];
     for (int i=0; i<buffer_size; i++){
         // Smooth by only adding the variation between values, and scaling by max.
-        outSlot[i] = (value + (outSlot[i]-value))/ (*max_absolute_pointer);
+        outSlot[i] = (value + (outSlot[i]-value))/ (max);
         value = outSlot[i];
     }
 }
@@ -38,8 +46,10 @@ void all_pass_filter(float * inSlot,
                  float delay_ms,
                  float gain)
 {
-    gain_squared = 1 - gain*gain;
-    intermediatSlot = new float[buffer_size];
+    // Calculate delay in samples from delay in ms and samples/second
+    int delay_samples = (int) (delay_ms * (sample_rate/1000));
+    float gain_squared = 1 - gain*gain;
+    float * intermediatSlot = new float[buffer_size];
     for (int i = 0; i< buffer_size; i++){
         if (i < delay_samples) {
             // Delayed samples not yet looped around, out = -g * in
