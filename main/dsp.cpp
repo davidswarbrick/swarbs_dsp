@@ -143,19 +143,19 @@ static void convert_to_float(void *args)
             abort();
         }
 
-        // Convert u16 to float(32).
-        for (int i = 0; i< BUFFER_SIZE; i++){
+        // Convert signed 16 to float(32).
+        for (int i = 0; i< BUFFER_SIZE-1; i++){
             inSlot[0][i] = (float)samples_data_buf[i*2]*DIV_S16;
             inSlot[1][i] = (float)samples_data_buf[i*2+1]*DIV_S16;
         }
         
         // process(inSlot, outSlot, BUFFER_SIZE);
-        comb_filter(inSlot[0], outSlot[0], BUFFER_SIZE, I2S_SAMPLE_RATE,0.4,0.7);
-        comb_filter(inSlot[1], outSlot[1], BUFFER_SIZE, I2S_SAMPLE_RATE,2.4,0.7);
+        comb_filter(inSlot[0], outSlot[0], BUFFER_SIZE, I2S_SAMPLE_RATE,5,0.7);
+        comb_filter(inSlot[1], outSlot[1], BUFFER_SIZE, I2S_SAMPLE_RATE,20,0.7);
         // Convert from float back to u16.
-        for (int i = 0; i< BUFFER_SIZE; i++){
-            samples_data_buf[i*2] = clip(outSlot[0][i]);
-            samples_data_buf[i*2+1] = clip(outSlot[1][i]);
+        for (int i = 0; i< BUFFER_SIZE-1; i++){
+            samples_data_buf[i*2] = clip(inSlot[0][i]);
+            samples_data_buf[i*2+1] = clip(inSlot[1][i]);
         }
 
         /* Write sample data to DAC */
@@ -197,5 +197,5 @@ void app_main() {
 
     // xTaskCreate(sine_wave, "sine_wave", 4096, NULL, 5, NULL);
     // xTaskCreate(passthrough, "passthrough", 4096, NULL, 5, NULL);
-    xTaskCreate(convert_to_float, "convert_to_float", 4096, NULL, 5, NULL);
+    xTaskCreate(convert_to_float, "convert_to_float", 65536, NULL, 5, NULL);
 }
