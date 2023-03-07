@@ -11,7 +11,9 @@
 #include "reverb.h"
 #define I2S_SAMPLE_RATE     (48000) // I2S sample rate 
 // #define BUFFER_SIZE         32      // Borrowed from Faust boilerplate, 2048 works too.
-#define BUFFER_SIZE 2048
+#define BUFFER_SIZE 1024
+#define DELAY_MS 20
+#define DRY_WET_RATIO 0.5
 #define MULT_S32 2147483647 // Max value for int32
 #define MULT_S16 32767 // Max value for int16
 #define DIV_S16 3.0518509e-5 // 1/MULT+S16
@@ -115,8 +117,87 @@ static void process(float ** inSlot, float ** outSlot, int buffer_size)
     }
 }
 
+static void delay(void *args)
+{
+    int delay_samples = (int) (DELAY_MS * (I2S_SAMPLE_RATE/1000));
+    float dry_wet = (float) DRY_WET_RATIO;
+    // Set up stereo buffers.
+    int16_t *samples_data_buf = (int16_t *)calloc(1, 2*BUFFER_SIZE);
+    float ** prevOutSlot = new float*[2];
+    prevOutSlot[0] = new float[BUFFER_SIZE];
+    prevOutSlot[1] = new float[BUFFER_SIZE];
+    // Initialise previous outslot to zero
+    for (int i = 0; i< BUFFER_SIZE; i++){
+        prevOutSlot[0][i] = 0.0;
+        prevOutSlot[1][i] = 0.0;
+    }
 
-static void convert_to_float(void *args)
+    float ** inSlot = new float*[2];
+    inSlot[0] = new float[BUFFER_SIZE];
+    inSlot[1] = new float[BUFFER_SIZE];
+
+    float ** outSlot = new float*[2];
+    outSlot[0] = new float[BUFFER_SIZE];
+    outSlot[1] = new float[BUFFER_SIZE];
+    if (!inSlot || !samples_data_buf || !outSlot || !prevOutSlot) {
+        printf("No memory for data buffers");
+        abort();
+    }
+    esp_err_t ret = ESP_OK;
+    size_t bytes_read = 0;
+    size_t bytes_write = 0;
+    printf("Delay start: %d Samples, Dry/Wet Ratio: %f \n",delay_samples,dry_wet);
+    while (1) {
+        /* Read sample data from ADC */
+        ret = i2s_channel_read(rx_handle, samples_data_buf, BUFFER_SIZE, &bytes_read, 1000);
+        if (ret != ESP_OK) {
+            printf("i2s read failed");
+            abort();
+        }
+        // Convert signed 16 to float(32).
+        for (int i = 0; i< BUFFER_SIZE; i++){
+            inSlot[0][i] = (float)samples_data_buf[i*2]*DIV_S16;
+            inSlot[1][i] = (float)samples_data_buf[i*2+1]*DIV_S16;
+        // }
+        // Add delayed samples to current buffer.
+        // for (int i=0; i< BUFFER_SIZE-1; i++){
+            if (i - delay_samples < 0 && delay_samples< BUFFER_SIZE){
+                // printf("Sample : %d, Prev: %d \n", i, BUFFER_SIZE-delay_samples+i);
+                // Use data from previous buffer
+                // e.g. if len(prevOut) = 100, i = 5, delay_samples = 20, want sample 85 
+                outSlot[0][i] = inSlot[0][i] + dry_wet * prevOutSlot[0][BUFFER_SIZE-delay_samples+i];
+                outSlot[1][i] = inSlot[1][i] + dry_wet * prevOutSlot[1][BUFFER_SIZE-delay_samples+i];
+            } else {
+                // printf("Sample : %d, This: %d \n",i, i-delay_samples);
+                // Use output from this buffer
+                outSlot[0][i] = inSlot[0][i] + dry_wet * outSlot[0][i-delay_samples];
+                outSlot[1][i] = inSlot[0][i] + dry_wet * outSlot[1][i-delay_samples];
+            }
+            // Copy outSlot to prevOutSlot, as long as BUFFER_SIZE-delay_samples > 0 this won't affect future lines
+            
+        // }
+        // Convert from float back to u16.
+        // for (int i = 0; i< BUFFER_SIZE-1; i++){
+            samples_data_buf[i*2] = clip(outSlot[0][i]);
+            samples_data_buf[i*2+1] = clip(outSlot[1][i]);
+            prevOutSlot[0][i] = outSlot[0][i];
+            prevOutSlot[1][i] = outSlot[1][i];
+        }
+
+        /* Write sample data to DAC */
+        ret = i2s_channel_write(tx_handle, samples_data_buf, BUFFER_SIZE, &bytes_write, 1000);
+        if (ret != ESP_OK) {
+            printf("i2s write failed");
+            abort();
+        }
+        if (bytes_read != bytes_write) {
+            printf("%d bytes read but only %d bytes are written", bytes_read, bytes_write);
+        }
+    }
+    vTaskDelete(NULL);
+}
+
+static void reverb(void *args)
 {
     // Set up stereo buffers.
     int16_t *samples_data_buf = (int16_t *)calloc(1, 2*BUFFER_SIZE);
@@ -149,13 +230,13 @@ static void convert_to_float(void *args)
             inSlot[1][i] = (float)samples_data_buf[i*2+1]*DIV_S16;
         }
         
-        // process(inSlot, outSlot, BUFFER_SIZE);
-        comb_filter(inSlot[0], outSlot[0], BUFFER_SIZE, I2S_SAMPLE_RATE,5,0.7);
-        comb_filter(inSlot[1], outSlot[1], BUFFER_SIZE, I2S_SAMPLE_RATE,20,0.7);
+        process(inSlot, outSlot, BUFFER_SIZE);
+        // comb_filter(inSlot[0], outSlot[0], BUFFER_SIZE, I2S_SAMPLE_RATE,5,0.7);
+        // comb_filter(inSlot[1], outSlot[1], BUFFER_SIZE, I2S_SAMPLE_RATE,20,0.7);
         // Convert from float back to u16.
         for (int i = 0; i< BUFFER_SIZE-1; i++){
-            samples_data_buf[i*2] = clip(inSlot[0][i]);
-            samples_data_buf[i*2+1] = clip(inSlot[1][i]);
+            samples_data_buf[i*2] = clip(outSlot[0][i]);
+            samples_data_buf[i*2+1] = clip(outSlot[1][i]);
         }
 
         /* Write sample data to DAC */
@@ -197,5 +278,6 @@ void app_main() {
 
     // xTaskCreate(sine_wave, "sine_wave", 4096, NULL, 5, NULL);
     // xTaskCreate(passthrough, "passthrough", 4096, NULL, 5, NULL);
-    xTaskCreate(convert_to_float, "convert_to_float", 65536, NULL, 5, NULL);
+    // xTaskCreate(reverb, "reverb",65536, NULL, 5, NULL);
+    xTaskCreate(delay, "delay",65536, NULL, 5, NULL);
 }
