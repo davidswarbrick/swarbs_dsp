@@ -123,13 +123,13 @@ static void delay(void *args)
     float dry_wet = (float) DRY_WET_RATIO;
     // Set up stereo buffers.
     int16_t *samples_data_buf = (int16_t *)calloc(1, 2*BUFFER_SIZE);
-    float ** prevOutSlot = new float*[2];
-    prevOutSlot[0] = new float[BUFFER_SIZE];
-    prevOutSlot[1] = new float[BUFFER_SIZE];
-    // Initialise previous outslot to zero
+    float ** prevInSlot = new float*[2];
+    prevInSlot[0] = new float[BUFFER_SIZE];
+    prevInSlot[1] = new float[BUFFER_SIZE];
+    // Initialise previous inslot to zero
     for (int i = 0; i< BUFFER_SIZE; i++){
-        prevOutSlot[0][i] = 0.0;
-        prevOutSlot[1][i] = 0.0;
+        prevInSlot[0][i] = 0.0;
+        prevInSlot[1][i] = 0.0;
     }
 
     float ** inSlot = new float*[2];
@@ -139,7 +139,8 @@ static void delay(void *args)
     float ** outSlot = new float*[2];
     outSlot[0] = new float[BUFFER_SIZE];
     outSlot[1] = new float[BUFFER_SIZE];
-    if (!inSlot || !samples_data_buf || !outSlot || !prevOutSlot) {
+    float ** tempSlot = new float*[2];
+    if (!inSlot || !samples_data_buf || !outSlot || !prevInSlot) {
         printf("No memory for data buffers");
         abort();
     }
@@ -162,8 +163,8 @@ static void delay(void *args)
             if (i - delay_samples < 0){
                 // Use data from previous buffer
                 // e.g. if len(prevOut) = 100, i = 5, delay_samples = 20, want sample 85 
-                outSlot[0][i] = prevOutSlot[0][BUFFER_SIZE-delay_samples+i];
-                outSlot[1][i] = prevOutSlot[1][BUFFER_SIZE-delay_samples+i];
+                outSlot[0][i] = prevInSlot[0][BUFFER_SIZE-delay_samples+i];
+                outSlot[1][i] = prevInSlot[1][BUFFER_SIZE-delay_samples+i];
             } else {
                 outSlot[0][i] = inSlot[0][i-delay_samples];
                 outSlot[1][i] = inSlot[1][i-delay_samples];
@@ -171,11 +172,13 @@ static void delay(void *args)
             // Convert from float back to u16.
             samples_data_buf[i*2] = clip(outSlot[0][i]);
             samples_data_buf[i*2+1] = clip(outSlot[1][i]);
-            // Copy outslot to previous slot to use for future delays
-            // ToDo: change this from an assignment to a deep copy
-            prevOutSlot[0][i] = outSlot[0][i];
-            prevOutSlot[1][i] = outSlot[1][i];
         }
+        // store our previous in slot pointer - we'll use it again
+        tempSlot = prevInSlot;
+        // we're done with the current inslot, make it previous.
+        prevInSlot = inSlot;
+        // Reuse pointer to previous In Slot for the incoming new data
+        inSlot = tempSlot;
         /* Write sample data to DAC */
         ret = i2s_channel_write(tx_handle, samples_data_buf, BUFFER_SIZE, &bytes_write, 1000);
         if (ret != ESP_OK) {
