@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <math.h>
+#include <cstring>
 #include <algorithm> //std max/min
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -122,29 +123,10 @@ static void delay(void *args)
     int delay_samples = (int) (DELAY_MS * (I2S_SAMPLE_RATE/1000));
     float dry_wet = (float) DRY_WET_RATIO;
     // Set up stereo buffers.
-    int16_t *samples_data_buf = (int16_t *)calloc(1, 2*BUFFER_SIZE);
-    // Double the size of the inSlot to handle the current and previous input samples
-    float ** inSlot = new float*[2];
-    inSlot[0] = new float[2*BUFFER_SIZE];
-    inSlot[1] = new float[2*BUFFER_SIZE];
-    // Initialise previous inslot to zero
-    for (int i = 0; i< BUFFER_SIZE; i++){
-        inSlot[0][i] = 0.0;
-        inSlot[1][i] = 0.0;
-    }
-    float * prevSlot_0 = &inSlot[0][0];
-    float * prevSlot_1 = &inSlot[1][0];
-    float * thisSlot_0 = &inSlot[0][BUFFER_SIZE]; 
-    float * thisSlot_1 = &inSlot[1][BUFFER_SIZE];
-
-    float * tempSlot_0;
-    float * tempSlot_1;
-
-    float ** outSlot = new float*[2];
-    outSlot[0] = new float[BUFFER_SIZE];
-    outSlot[1] = new float[BUFFER_SIZE];
-    float ** tempSlot = new float*[2];
-    if (!inSlot || !samples_data_buf || !outSlot) {
+    int16_t *input_buf = (int16_t *)calloc(BUFFER_SIZE,2);
+    int16_t *process_buf = (int16_t *)calloc(BUFFER_SIZE,2);
+    int16_t *output_buf = (int16_t *)calloc(BUFFER_SIZE,2);
+    if (!input_buf || !process_buf || !output_buf) {
         printf("No memory for data buffers");
         abort();
     }
@@ -154,41 +136,22 @@ static void delay(void *args)
     printf("Delay start: %d Samples, Dry/Wet Ratio: %f \n",delay_samples,dry_wet);
     while (1) {
         /* Read sample data from ADC */
-        ret = i2s_channel_read(rx_handle, samples_data_buf, BUFFER_SIZE, &bytes_read, 1000);
+        ret = i2s_channel_read(rx_handle, input_buf, BUFFER_SIZE, &bytes_read, 1000);
         if (ret != ESP_OK) {
             printf("i2s read failed");
             abort();
         }
-        // Convert signed 16 to float(32).
-        for (int i = 0; i< BUFFER_SIZE; i++){
-            printf("Loop: %d \n",i);
-            *(thisSlot_0+i) = (float)samples_data_buf[i*2]*DIV_S16;
-            *(thisSlot_1+i) = (float)samples_data_buf[i*2+1]*DIV_S16;
-
-            if (i - delay_samples < 0){
-                // Use data from previous buffer
-                // e.g. if len(prevOut) = 100, i = 5, delay_samples = 20, want sample 85 
-                outSlot[0][i] = *(prevSlot_0 + BUFFER_SIZE -i + delay_samples);
-                outSlot[1][i] = *(prevSlot_1 + BUFFER_SIZE -i + delay_samples);
-            } else {
-                outSlot[0][i] = *(thisSlot_0 + i - delay_samples);
-                outSlot[1][i] = *(thisSlot_1 + i - delay_samples);
-            }
-            // Convert from float back to u16.
-            samples_data_buf[i*2] = clip(outSlot[0][i]);
-            samples_data_buf[i*2+1] = clip(outSlot[1][i]);
-        }
-        // store our previous in slot pointer - we'll use it again
-        tempSlot_0 = prevSlot_0;
-        tempSlot_1 = prevSlot_1;
-        // we're done with the current inslot, make it previous.
-        prevSlot_0 = thisSlot_0;
-        prevSlot_1 = thisSlot_1;
-        // Reuse pointer to previous In Slot for the incoming new data
-        thisSlot_0 = tempSlot_0;
-        thisSlot_1 = tempSlot_1;
+        // Copy end of previous buffer to the start of the current output
+        // std::copy(process_buf[BUFFER_SIZE-1-delay_samples],process_buf[BUFFER_SIZE],output_buf[0]);
+        std::memcpy(&output_buf[0],&process_buf[BUFFER_SIZE-1-delay_samples],(size_t) delay_samples * 2);
+        // Copy start of current buffer to end of current output
+        // std::copy(input_buf[0],input_buf[BUFFER_SIZE-delay_samples],output_buf[delay_samples]);
+        std::memcpy(&output_buf[delay_samples],&input_buf[0],(size_t)(2*(BUFFER_SIZE-delay_samples)));
+        // Copy current input to processing buffer to be used on next stage
+        // std::copy(input_buf[0],input_buf[BUFFER_SIZE], process_buf[0]);
+        std::memcpy(&process_buf[0], &input_buf[0], (size_t)BUFFER_SIZE*2);
         /* Write sample data to DAC */
-        ret = i2s_channel_write(tx_handle, samples_data_buf, BUFFER_SIZE, &bytes_write, 1000);
+        ret = i2s_channel_write(tx_handle, output_buf, BUFFER_SIZE, &bytes_write, 1000);
         if (ret != ESP_OK) {
             printf("i2s write failed");
             abort();
