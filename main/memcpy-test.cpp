@@ -1,13 +1,13 @@
 #include <stdlib.h>
 #include <iostream>
 #include <cstring>
-#define BUFFER_SIZE 10
+#define BUFFER_SIZE 1024
 
 int main() {
     int16_t *input_buf = (int16_t *)calloc(BUFFER_SIZE,2);
     int16_t *process_buf = (int16_t *)calloc(BUFFER_SIZE,2);
     int16_t *output_buf = (int16_t *)calloc(BUFFER_SIZE,2);
-    int delay_samples = 4;
+    int delay_samples = 960;
     for (int i = 0; i< BUFFER_SIZE; i++){
         input_buf[i] = i+BUFFER_SIZE;
         process_buf[i] =i;

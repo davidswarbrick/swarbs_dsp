@@ -124,7 +124,7 @@ static void delay(void *args)
     float dry_wet = (float) DRY_WET_RATIO;
     // Set up stereo buffers.
     int16_t *input_buf = (int16_t *)calloc(BUFFER_SIZE,2);
-    int16_t *process_buf = (int16_t *)calloc(BUFFER_SIZE,2);
+    int16_t *process_buf = (int16_t *)calloc(3*BUFFER_SIZE,2);
     int16_t *output_buf = (int16_t *)calloc(BUFFER_SIZE,2);
     if (!input_buf || !process_buf || !output_buf) {
         printf("No memory for data buffers");
@@ -143,16 +143,26 @@ static void delay(void *args)
         }
         // Copy end of previous buffer to the start of the current output
         // std::copy(process_buf[BUFFER_SIZE-1-delay_samples],process_buf[BUFFER_SIZE],output_buf[0]);
-        std::memcpy(&output_buf[0],&process_buf[BUFFER_SIZE-delay_samples],(size_t) delay_samples * 2);
-        printf("output buf: %d", output_buf[delay_samples]);
+        // std::memcpy(&output_buf[0],&process_buf[BUFFER_SIZE-delay_samples],(size_t) delay_samples * 2);
         // Copy start of current buffer to end of current output
         // std::copy(input_buf[0],input_buf[BUFFER_SIZE-delay_samples],output_buf[delay_samples]);
-        std::memcpy(&output_buf[delay_samples],&input_buf[0],(size_t)(2*(BUFFER_SIZE-delay_samples)));
-        printf("post copy output buf: %d \n", output_buf[delay_samples]);
+        // printf("out/inputbuf 0 : %d  %d \n", output_buf[0], input_buf[0]);
+        // std::memcpy(&output_buf[delay_samples],&input_buf[0],(size_t)(2*(BUFFER_SIZE-delay_samples)));
         // Copy current input to processing buffer to be used on next stage
         // std::copy(input_buf[0],input_buf[BUFFER_SIZE], process_buf[0]);
-        std::memcpy(&process_buf[0], &input_buf[0], (size_t)BUFFER_SIZE*2);
-        // std::memcpy(&output_buf[0], &process_buf[0], (size_t)BUFFER_SIZE*2);
+        
+        std::memcpy(&process_buf[2*BUFFER_SIZE], &process_buf[BUFFER_SIZE], BUFFER_SIZE*sizeof(int16_t));
+        std::memcpy(&process_buf[BUFFER_SIZE], &process_buf[0], BUFFER_SIZE*sizeof(int16_t));
+        std::memcpy(&process_buf[0], &input_buf[0], BUFFER_SIZE*sizeof(int16_t));
+
+        // for (int i = 0; i*2+1 < 3* BUFFER_SIZE; i++){
+        //     if (i*2 - delay_samples > 0 ){
+        //         process_buf[i*2] = process_buf[i*2-delay_samples];
+        //         process_buf[i*2+1] =process_buf[i*2+1-delay_samples];
+        //     }
+        // }
+
+        std::memcpy(&output_buf[0], &process_buf[2*BUFFER_SIZE], BUFFER_SIZE*sizeof(int16_t));
         /* Write sample data to DAC */
         ret = i2s_channel_write(tx_handle, output_buf, BUFFER_SIZE, &bytes_write, 1000);
         if (ret != ESP_OK) {
