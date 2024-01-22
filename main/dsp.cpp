@@ -13,7 +13,7 @@
 #define I2S_SAMPLE_RATE     (48000) // I2S sample rate 
 // #define BUFFER_SIZE         32      // Borrowed from Faust boilerplate, 2048 works too.
 #define BUFFER_SIZE 8192
-#define DELAY_MS 20
+#define DELAY_MS 160
 #define DRY_WET_RATIO 0.5
 #define MULT_S32 2147483647 // Max value for int32
 #define MULT_S16 32767 // Max value for int16
@@ -142,39 +142,15 @@ static void delay(void *args)
             printf("i2s read failed");
             abort();
         }
-        // Copy end of previous buffer to the start of the current output
-        // std::copy(process_buf[BUFFER_SIZE-1-delay_samples],process_buf[BUFFER_SIZE],output_buf[0]);
-        // std::memcpy(&output_buf[0],&process_buf[BUFFER_SIZE-delay_samples],(size_t) delay_samples * 2);
-        // Copy start of current buffer to end of current output
-        // std::copy(input_buf[0],input_buf[BUFFER_SIZE-delay_samples],output_buf[delay_samples]);
-        // printf("out/inputbuf 0 : %d  %d \n", output_buf[0], input_buf[0]);
-        // std::memcpy(&output_buf[delay_samples],&input_buf[0],(size_t)(2*(BUFFER_SIZE-delay_samples)));
-        // Copy current input to processing buffer to be used on next stage
-        // std::copy(input_buf[0],input_buf[BUFFER_SIZE], process_buf[0]);
-        
-        // std::memcpy(&process_buf[2*BUFFER_SIZE], &process_buf[BUFFER_SIZE], BUFFER_SIZE*sizeof(int16_t));
-        // std::memcpy(&process_buf[BUFFER_SIZE], &process_buf[0], BUFFER_SIZE*sizeof(int16_t));
         std::memcpy(&process_buf[0], &input_buf[0], BUFFER_SIZE*sizeof(int16_t));
 
-        // Copy offset using memcpy
-        std::memcpy(&process_buf[BUFFER_SIZE + delay_samples] , &process_buf[delay_samples], BUFFER_SIZE*sizeof(int16_t));
-        // Copy middle frame to end frame
-        std::memcpy(&process_buf[2*BUFFER_SIZE], &process_buf[BUFFER_SIZE], BUFFER_SIZE*sizeof(int16_t));
-
-        // for (int i = 0; i*2+1 < 2* BUFFER_SIZE; i++){
-        //     if (i*2 - delay_samples > 0 ){
-        //         process_buf[i*2] = process_buf[i*2-delay_samples];
-        //         process_buf[i*2+1] = process_buf[i*2+1-delay_samples];
-        //     }
-        // }
-        // for (int i = BUFFER_SIZE; i*2+1 < 3* BUFFER_SIZE; i++){
-        //     process_buf[i*2] = process_buf[i*2-BUFFER_SIZE];
-        //     process_buf[i*2+1] = process_buf[i*2+1-BUFFER_SIZE];
-        // }
-        // for (size_t i = BUFFER_SIZE*3; i > BUFFER_SIZE; i--){
-        //     process_buf[i] = process_buf[i-BUFFER_SIZE];
-        // }
-
+        // Output (2-3 BUFFER_SIZE) is the final delay_samples of the last input buffer (1-BUFFER_SIZE)
+        std::memcpy(&process_buf[2*BUFFER_SIZE], &process_buf[2*BUFFER_SIZE-delay_samples], delay_samples*sizeof(int16_t));
+        // Plus the remaining samples from the latest buffer
+        std::memcpy(&process_buf[2*BUFFER_SIZE+delay_samples], &process_buf[0], (BUFFER_SIZE-delay_samples)*sizeof(int16_t));
+        // Finally back up the current input buffer to the previous input buffer location.
+        std::memcpy(&process_buf[BUFFER_SIZE ] , &process_buf[0], BUFFER_SIZE*sizeof(int16_t));
+        // Copy final frame to output.
         std::memcpy(&output_buf[0], &process_buf[2*BUFFER_SIZE], BUFFER_SIZE*sizeof(int16_t));
         /* Write sample data to DAC */
         ret = i2s_channel_write(tx_handle, output_buf, BUFFER_SIZE, &bytes_write, 1000);
@@ -269,7 +245,7 @@ void app_main() {
     wm8978.i2sCfg(2,0);       // I2S format Philips, 16bit
 
     // xTaskCreate(sine_wave, "sine_wave", 4096, NULL, 5, NULL);
-    xTaskCreate(passthrough, "passthrough", 4096, NULL, 5, NULL);
+    // xTaskCreate(passthrough, "passthrough", 4096, NULL, 5, NULL);
     // xTaskCreate(reverb, "reverb",65536, NULL, 5, NULL);
-    // xTaskCreate(delay, "delay",65536, NULL, 5, NULL);
+    xTaskCreate(delay, "delay",65536, NULL, 5, NULL);
 }
