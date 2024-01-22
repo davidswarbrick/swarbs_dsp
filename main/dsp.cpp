@@ -12,7 +12,7 @@
 #include "reverb.h"
 #define I2S_SAMPLE_RATE     (48000) // I2S sample rate 
 // #define BUFFER_SIZE         32      // Borrowed from Faust boilerplate, 2048 works too.
-#define BUFFER_SIZE 1024
+#define BUFFER_SIZE 8192
 #define DELAY_MS 20
 #define DRY_WET_RATIO 0.5
 #define MULT_S32 2147483647 // Max value for int32
@@ -120,12 +120,13 @@ static void process(float ** inSlot, float ** outSlot, int buffer_size)
 
 static void delay(void *args)
 {
-    int delay_samples = (int) (DELAY_MS * (I2S_SAMPLE_RATE/1000));
+    size_t delay_samples = (size_t) (DELAY_MS * (I2S_SAMPLE_RATE/1000));
     float dry_wet = (float) DRY_WET_RATIO;
     // Set up stereo buffers.
-    int16_t *input_buf = (int16_t *)calloc(BUFFER_SIZE,2);
-    int16_t *process_buf = (int16_t *)calloc(3*BUFFER_SIZE,2);
-    int16_t *output_buf = (int16_t *)calloc(BUFFER_SIZE,2);
+    int16_t *input_buf = (int16_t *)calloc(BUFFER_SIZE,sizeof(int16_t));
+    int16_t *process_buf = (int16_t *)calloc(3*BUFFER_SIZE,sizeof(int16_t));
+    int16_t *output_buf = (int16_t *)calloc(BUFFER_SIZE,sizeof(int16_t));
+    printf("input: %p, process: %p, output: %p\n",input_buf, process_buf, output_buf);
     if (!input_buf || !process_buf || !output_buf) {
         printf("No memory for data buffers");
         abort();
@@ -133,7 +134,7 @@ static void delay(void *args)
     esp_err_t ret = ESP_OK;
     size_t bytes_read = 0;
     size_t bytes_write = 0;
-    printf("Delay start: %d Samples, Dry/Wet Ratio: %f \n",delay_samples,dry_wet);
+    printf("Buffers sized: %d, Delay start: %d Samples, Dry/Wet Ratio: %f \n",BUFFER_SIZE,delay_samples,dry_wet);
     while (1) {
         /* Read sample data from ADC */
         ret = i2s_channel_read(rx_handle, input_buf, BUFFER_SIZE, &bytes_read, 1000);
@@ -151,15 +152,27 @@ static void delay(void *args)
         // Copy current input to processing buffer to be used on next stage
         // std::copy(input_buf[0],input_buf[BUFFER_SIZE], process_buf[0]);
         
-        std::memcpy(&process_buf[2*BUFFER_SIZE], &process_buf[BUFFER_SIZE], BUFFER_SIZE*sizeof(int16_t));
-        std::memcpy(&process_buf[BUFFER_SIZE], &process_buf[0], BUFFER_SIZE*sizeof(int16_t));
+        // std::memcpy(&process_buf[2*BUFFER_SIZE], &process_buf[BUFFER_SIZE], BUFFER_SIZE*sizeof(int16_t));
+        // std::memcpy(&process_buf[BUFFER_SIZE], &process_buf[0], BUFFER_SIZE*sizeof(int16_t));
         std::memcpy(&process_buf[0], &input_buf[0], BUFFER_SIZE*sizeof(int16_t));
 
-        // for (int i = 0; i*2+1 < 3* BUFFER_SIZE; i++){
+        // Copy offset using memcpy
+        std::memcpy(&process_buf[BUFFER_SIZE + delay_samples] , &process_buf[delay_samples], BUFFER_SIZE*sizeof(int16_t));
+        // Copy middle frame to end frame
+        std::memcpy(&process_buf[2*BUFFER_SIZE], &process_buf[BUFFER_SIZE], BUFFER_SIZE*sizeof(int16_t));
+
+        // for (int i = 0; i*2+1 < 2* BUFFER_SIZE; i++){
         //     if (i*2 - delay_samples > 0 ){
         //         process_buf[i*2] = process_buf[i*2-delay_samples];
-        //         process_buf[i*2+1] =process_buf[i*2+1-delay_samples];
+        //         process_buf[i*2+1] = process_buf[i*2+1-delay_samples];
         //     }
+        // }
+        // for (int i = BUFFER_SIZE; i*2+1 < 3* BUFFER_SIZE; i++){
+        //     process_buf[i*2] = process_buf[i*2-BUFFER_SIZE];
+        //     process_buf[i*2+1] = process_buf[i*2+1-BUFFER_SIZE];
+        // }
+        // for (size_t i = BUFFER_SIZE*3; i > BUFFER_SIZE; i--){
+        //     process_buf[i] = process_buf[i-BUFFER_SIZE];
         // }
 
         std::memcpy(&output_buf[0], &process_buf[2*BUFFER_SIZE], BUFFER_SIZE*sizeof(int16_t));
@@ -256,7 +269,7 @@ void app_main() {
     wm8978.i2sCfg(2,0);       // I2S format Philips, 16bit
 
     // xTaskCreate(sine_wave, "sine_wave", 4096, NULL, 5, NULL);
-    // xTaskCreate(passthrough, "passthrough", 4096, NULL, 5, NULL);
+    xTaskCreate(passthrough, "passthrough", 4096, NULL, 5, NULL);
     // xTaskCreate(reverb, "reverb",65536, NULL, 5, NULL);
-    xTaskCreate(delay, "delay",65536, NULL, 5, NULL);
+    // xTaskCreate(delay, "delay",65536, NULL, 5, NULL);
 }
