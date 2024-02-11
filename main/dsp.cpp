@@ -20,7 +20,8 @@
 #define DIV_S16 3.0518509e-5 // 1/MULT+S16
 #define clip(sample) std::max(-MULT_S16, std::min(MULT_S16, ((int)(sample * MULT_S16))));
 
-
+#define DMA_BUFF_SIZE 240 * 2 * 16 / 8 // dma_frame_num * slot_num * slot_bit_width /8 = 960 bytes
+#define NUM_BUFFERS 2
 
 // Sine wave example parameters 
 #define WAVE_FREQ_HZ    (200)  // test waveform frequency
@@ -31,9 +32,59 @@
 i2s_chan_handle_t tx_handle;
 i2s_chan_handle_t rx_handle;
 
+typedef struct {
+    uint8_t *start_ptr;
+    uint8_t buf_offset;
+} buffer_region;
+
+buffer_region input_buffer = {
+    .start_ptr = (uint8_t *) calloc(NUM_BUFFERS*DMA_BUFF_SIZE, 1),
+    .buf_offset= 0
+};
+
+buffer_region output_buffer = {
+    .start_ptr = (uint8_t *) calloc(NUM_BUFFERS*DMA_BUFF_SIZE, 1),
+    .buf_offset= 0
+};
+
+// I2S Callbacks
+
+static bool IRAM_ATTR rx_done(i2s_chan_handle_t handle, i2s_event_data_t *event, void *user_ctx)
+{
+    buffer_region* buf = static_cast<buffer_region*>(user_ctx);
+    uint8_t * dest = buf->start_ptr + DMA_BUFF_SIZE * buf->buf_offset;
+    memcpy(dest, event->data, event->size);
+    buf->buf_offset++;
+    buf->buf_offset %= NUM_BUFFERS;
+    return false;
+}
+
+static bool IRAM_ATTR tx_done(i2s_chan_handle_t handle, i2s_event_data_t *event, void *user_ctx)
+{
+    buffer_region* buf = static_cast<buffer_region*>(user_ctx);
+    event->data = 
+    
+    uint8_t * dest =
+    memcpy(dest, , event->size);
+    buf->buf_offset++;
+    buf->buf_offset %= NUM_BUFFERS;
+    return false;
+}
+
+
+
+
+i2s_event_callbacks_t tx_callbacks = {
+    .on_recv = rx_done,
+    .on_recv_q_ovf = NULL,
+    .on_sent = NULL,
+    .on_send_q_ovf = NULL,
+};
+
 static void init_i2s(void)
 {
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
+    // .dma_desc_num = 6, .dma_frame_num = 240,
     // Allocate both tx and rx channel at the same time for full-duplex mode.
     ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, &tx_handle, &rx_handle));
     i2s_std_config_t std_cfg = {
@@ -56,6 +107,7 @@ static void init_i2s(void)
     // Initialise the channels
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(tx_handle, &std_cfg));
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(rx_handle, &std_cfg));
+    ESP_ERROR_CHECK(i2s_channel_register_event_callback(rx_handle, &tx_callbacks, &input_buffer));
 }
 
 
